@@ -1,0 +1,31 @@
+# 3Dokploy Multi-Org Docker Compose
+# Despliegue con soporte para 4 organizaciones, login y Docker socket interno
+services:
+  3dokploy:
+    build: .
+    image: 3dokploy:multi-org
+    container_name: 3dokploy-multi
+    restart: unless-stopped
+    ports:
+      # Puerto 3100 en el host para no chocar con el puerto 3000 de Dokploy
+      - "${HOST_PORT:-3100}:3000"
+    environment:
+      - PORT=3000
+      - DATA_DIR=/app/data
+      - DOKPLOY_URL=${DOKPLOY_URL:-http://host.docker.internal:3000}
+    volumes:
+      # Persistencia de configuraciones, usuarios y contraseñas
+      - ./data:/app/data
+      # Acceso interno a métricas de contenedores en tiempo real (estilo Beszel)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    extra_hosts:
+      # Permite comunicar con el host interno si se usa http://host.docker.internal:3000
+      - host.docker.internal:host-gateway
+    networks:
+      - default
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    name: dokploy-network
+    external: true
