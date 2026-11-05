@@ -17,9 +17,8 @@ COPY bin ./bin
 RUN chmod +x ./bin/reset-password && ln -s /app/bin/reset-password /usr/local/bin/reset-password
 
 # Ensure persistent data directory exists
-RUN mkdir -p /app/data && chown -R node:node /app
+RUN mkdir -p /app/data
 
-USER node
 EXPOSE 3000
 VOLUME ["/app/data"]
 
