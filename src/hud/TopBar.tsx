@@ -16,14 +16,15 @@ export interface TopBarProps {
 
 export function TopBar({
   organizations = [],
-  activeOrgId = 'all',
-  onSelectOrg,
   onOpenSettings,
   onLogout,
   username,
 }: TopBarProps) {
   const servers = useStore((s) => s.servers);
   const services = useStore((s) => s.services);
+  const layout = useStore((s) => s.layout);
+  const storeActiveOrgId = useStore((s) => s.activeOrgId);
+  const setActiveOrg = useStore((s) => s.setActiveOrg);
   const ready = useStore((s) => s.ready);
   const menu = useStore((s) => s.menu);
   const now = useStore((s) => s.now);
@@ -32,6 +33,18 @@ export function TopBar({
   const dropdown = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<MenuTab, HTMLButtonElement>());
   const [anchor, setAnchor] = useState<{ left: number; width: number } | null>(null);
+
+  const sectorList = useMemo(() => {
+    if (layout?.districts && layout.districts.length > 0) {
+      return layout.districts.map((d) => ({
+        id: d.id,
+        name: d.name,
+        color: d.color,
+        count: d.projectIds.length,
+      }));
+    }
+    return organizations.map((o) => ({ ...o, count: 0 }));
+  }, [layout, organizations]);
 
   const serverSummary = useMemo(
     () =>
@@ -76,30 +89,31 @@ export function TopBar({
           <SourceBadge />
         </div>
 
-        {organizations && organizations.length > 0 && (
-          <div className="org-switcher" title="Filtrar por organización o ver mapa global">
+        {sectorList.length > 0 && (
+          <div className="org-switcher" title="Volar a una Zona Industrial / Organización o ver el Complejo Global">
             <button
               type="button"
-              className={`org-pill ${activeOrgId === 'all' ? 'is-active' : ''}`}
-              onClick={() => onSelectOrg && onSelectOrg('all')}
+              className={`org-pill ${storeActiveOrgId === 'all' ? 'is-active' : ''}`}
+              onClick={() => setActiveOrg('all')}
             >
               <span className="org-dot-multi">
-                {organizations.map((o) => (
+                {sectorList.map((o) => (
                   <span key={o.id} className="org-dot-mini" style={{ background: o.color }} />
                 ))}
               </span>
-              <span>Global ({organizations.length})</span>
+              <span>Complejo Global ({sectorList.length})</span>
             </button>
 
-            {organizations.map((org) => (
+            {sectorList.map((org) => (
               <button
                 key={org.id}
                 type="button"
-                className={`org-pill ${activeOrgId === org.id ? 'is-active' : ''}`}
-                onClick={() => onSelectOrg && onSelectOrg(org.id)}
+                className={`org-pill ${storeActiveOrgId === org.id ? 'is-active' : ''}`}
+                onClick={() => setActiveOrg(storeActiveOrgId === org.id ? 'all' : org.id)}
               >
                 <span className="org-dot" style={{ background: org.color, color: org.color }} />
                 <span>{org.name}</span>
+                {org.count > 0 && <span className="muted" style={{ fontSize: '10px', marginLeft: '2px' }}>({org.count})</span>}
               </button>
             ))}
           </div>

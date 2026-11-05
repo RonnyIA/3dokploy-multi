@@ -1,4 +1,4 @@
-﻿import { Environment, Lightformer, OrbitControls } from '@react-three/drei';
+import { Environment, Lightformer, OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import { useEffect, useMemo, useRef } from 'react';
@@ -10,6 +10,7 @@ import { ACCENT, BG, NEON } from '../theme';
 import { Agents } from './Agents';
 import { DataFlow } from './DataFlow';
 import { DeployBeams, Pulses } from './Effects';
+import { IndustrialComplex } from './IndustrialComplex';
 import { InfiniteGrid } from './InfiniteGrid';
 import { Building } from './Building';
 import { animateLeds } from './materials';
@@ -69,6 +70,7 @@ export function Scene() {
       {layout && (
         // Keyed by session: a reconnect rebuilds agents, effects and the camera fit.
         <group key={session}>
+          <IndustrialComplex layout={layout} />
           {layout.buildings.map((b) => (
             <Building key={b.projectId} b={b} />
           ))}
@@ -142,11 +144,15 @@ interface CameraAnim {
 const corners = (b: BuildingLayout) =>
   [b.x, b.x + b.w].flatMap((x) => [b.z, b.z + b.d + 1.6].flatMap((z) => [0, WALL.high + 0.9].map((y) => new THREE.Vector3(x, y, z))));
 
-/** Opening / reset view: every building and the technician's spot. */
+/** Opening / reset view: every building, the reactor and the technician's spot. */
 function fitView(layout: Layout, width: number, height: number) {
   const pts = layout.buildings.flatMap(corners);
   pts.push(new THREE.Vector3(...layout.home), new THREE.Vector3(...layout.home).setY(1.2));
-  return fitPoints(pts, width, height, 1);
+  pts.push(
+    new THREE.Vector3(layout.reactorPos[0] - 2.5, 0, layout.reactorPos[2] - 3.5),
+    new THREE.Vector3(layout.reactorPos[0] + 2.5, 4.2, layout.reactorPos[2] + 3.5),
+  );
+  return fitPoints(pts, width, height, 0.94);
 }
 
 /**
@@ -394,7 +400,16 @@ function CameraRig({ layout }: { layout: Layout }) {
   useEffect(
     () =>
       useStore.subscribe((s, prev) => {
-        if (s.focus && s.focus !== prev.focus && s.focus.kind === 'project') {
+        if (s.focus && s.focus !== prev.focus && s.focus.kind === 'district') {
+          const d = layout.districts.find((x) => x.id === s.focus!.id);
+          if (d) {
+            const distPts = [d.x, d.x + d.w].flatMap((x) =>
+              [d.z, d.z + d.d].flatMap((z) => [0, WALL.high + 1.2].map((y) => new THREE.Vector3(x, y, z))),
+            );
+            const view = fitPoints(distPts, sizeRef.current.width, sizeRef.current.height, 0.85);
+            anim.current = { target: view.target, zoom: Math.min(view.zoom, 52) };
+          }
+        } else if (s.focus && s.focus !== prev.focus && s.focus.kind === 'project') {
           const b = layout.buildings.find((x) => x.projectId === s.focus!.id);
           if (b) {
             const view = fitPoints(corners(b), sizeRef.current.width, sizeRef.current.height, 0.7);

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * App state: the world as the data source reports it, plus UI state.
  *
  * Selector rule: select raw slices (records, primitives) and derive with useMemo in components.
@@ -23,7 +23,7 @@ import { computeLayout, structureKey, type Layout } from './layout';
 
 export type MenuTab = 'activity' | 'deploys' | 'alerts' | 'services' | 'projects';
 export type CameraCommand = { kind: 'zoomIn' | 'zoomOut' | 'reset' | 'pan'; n: number; dx?: number; dz?: number };
-export type Focus = { kind: 'service' | 'project'; id: string; n: number };
+export type Focus = { kind: 'service' | 'project' | 'district'; id: string; n: number };
 export type Tone = 'ok' | 'info' | 'warn' | 'crit' | 'muted';
 
 export type EventKind = 'deploy-start' | 'deploy-ok' | 'deploy-fail' | 'down' | 'up' | 'stopped' | 'started' | 'new-node' | 'cpu';
@@ -84,6 +84,8 @@ export interface State extends WorldSlice {
   selectedId: string | null;
   /** Project in focus: set when a project is opened, or implied by the selected node. */
   selectedProjectId: string | null;
+  /** Selected Organization / Industrial Sector ('all' for global view). */
+  activeOrgId: string;
   /** Bumped on every focus request so the camera moves even when the target is unchanged. */
   focus: Focus | null;
   hoveredId: string | null;
@@ -102,6 +104,7 @@ export interface State extends WorldSlice {
   connect(source: DataSource): () => void;
   select(id: string | null): void;
   focusProject(projectId: string): void;
+  setActiveOrg(orgId: string): void;
   /** Esc: node → its project → overview. */
   back(): void;
   /** Re-run the camera move for whatever is selected. */
@@ -175,6 +178,7 @@ export const useStore = create<State>()((set, get) => ({
 
   selectedId: null,
   selectedProjectId: null,
+  activeOrgId: 'all',
   focus: null,
   hoveredId: null,
   hoveredProjectId: null,
@@ -274,6 +278,20 @@ export const useStore = create<State>()((set, get) => ({
   focusProject(projectId) {
     const prev = get().focus;
     set({ selectedId: null, selectedProjectId: projectId, focus: { kind: 'project', id: projectId, n: (prev?.n ?? 0) + 1 } });
+  },
+  setActiveOrg(orgId) {
+    const s = get();
+    if (orgId === 'all') {
+      set({ activeOrgId: 'all', selectedId: null, selectedProjectId: null });
+      s.cameraCommand('reset');
+    } else {
+      set({
+        activeOrgId: orgId,
+        selectedId: null,
+        selectedProjectId: null,
+        focus: { kind: 'district', id: orgId, n: (s.focus?.n ?? 0) + 1 },
+      });
+    }
   },
   back() {
     const s = get();

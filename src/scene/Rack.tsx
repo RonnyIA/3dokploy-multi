@@ -1,9 +1,9 @@
-﻿import { Billboard } from '@react-three/drei';
+import { Billboard } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { memo, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { isDb, type Service } from '../data/types';
-import { mb, pct } from '../format';
+import { mb, pct, rate } from '../format';
 import { RACK, TANK, type Layout, type Slot } from '../layout';
 import { matchesSearch, useStore } from '../store';
 import { ACCENT, KIND_COLOR, NEON } from '../theme';
@@ -11,11 +11,10 @@ import { Label } from './Label';
 import { CABINET, CABINET_DOOR, DIM_OPACITY, GEO, TANK_BODY, heatColor, ledMaterial } from './materials';
 
 const LED_ROWS = [0.36, 0.62, 0.88, 1.14, 1.4];
-const BASE_Y = 0.03; // building slab height
+const BASE_Y = 0.045; // building slab height
 
-export const unitHeight = (svc: Service) => (isDb(svc.kind) ? 0.08 + TANK.h + TANK.r * 0.35 : RACK.h + 0.06);
+export const unitHeight = (svc: Service) => (isDb(svc.kind) ? 0.08 + TANK.h + TANK.r * 0.35 : RACK.h + 0.08);
 
-/** One service in the scene: wiring (data, pointer events) around a dumb Cabinet / Tank. */
 export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
   const id = slot.serviceId;
   const svc = useStore((s) => s.services[id]);
@@ -23,9 +22,11 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
   const env = useStore((s) => s.environments[slot.environmentId]);
   const search = useStore((s) => s.search);
   const heatmap = useStore((s) => s.heatmap);
+  const activeOrgId = useStore((s) => s.activeOrgId);
 
   if (!svc) return null;
-  const dim = !matchesSearch(svc, project, search, env);
+  const orgDim = activeOrgId !== 'all' && project?.organizationId !== activeOrgId;
+  const dim = orgDim || !matchesSearch(svc, project, search, env);
 
   const over = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -62,37 +63,69 @@ interface UnitProps {
 export function Cabinet({ svc, dim, heat }: UnitProps) {
   const body = useMemo(() => (heat ? heatColor(svc.cpu, 'cabinet') : new THREE.Color(CABINET)), [heat, svc.cpu]);
   const door = useMemo(() => (heat ? body.clone().multiplyScalar(0.8) : new THREE.Color(CABINET_DOOR)), [heat, body]);
-  // `transparent` is baked into the shader program, so a dim toggle remounts the material (key).
   const fade = { transparent: dim, opacity: dim ? DIM_OPACITY : 1 };
   const mk = dim ? 'dim' : 'solid';
   const led = ledMaterial(svc.status, dim);
   const kind = KIND_COLOR[svc.kind];
 
+  // Live load bar height on the front of the rack (scales with real RAM & CPU)
+  const memNorm = Math.min(1, Math.max(0.12, (svc.memMb || 10) / 512));
+  const barH = (RACK.h - 0.36) * memNorm;
+
   return (
     <group>
+      {/* Heavy shock-absorbing base foot */}
       <mesh geometry={GEO.rackFoot} position-y={0.025}>
         <meshStandardMaterial key={mk} color="#05080e" {...fade} />
       </mesh>
+      {/* Main armored server chassis */}
       <mesh geometry={GEO.rackBody} position-y={RACK.h / 2 + 0.03} castShadow={!dim} receiveShadow>
-        <meshStandardMaterial key={mk} color={body} roughness={0.35} metalness={0.6} {...fade} />
+        <meshStandardMaterial key={mk} color={body} roughness={0.32} metalness={0.68} {...fade} />
       </mesh>
+      {/* Side structural bumpers */}
+      {[-RACK.w / 2 - 0.015, RACK.w / 2 + 0.015].map((sx) => (
+        <mesh key={sx} position={[sx, RACK.h / 2 + 0.03, 0]}>
+          <boxGeometry args={[0.03, RACK.h - 0.08, RACK.d - 0.08]} />
+          <meshStandardMaterial key={mk} color="#16243a" roughness={0.35} metalness={0.8} {...fade} />
+        </mesh>
+      ))}
+      {/* Glowing Top Crown Cap */}
       <mesh geometry={GEO.rackLid} position-y={RACK.h + 0.06} castShadow={!dim}>
         <meshStandardMaterial
           key={mk}
           color={kind}
           emissive={kind}
-          emissiveIntensity={dim ? 0.2 : 1.15}
-          roughness={0.4}
+          emissiveIntensity={dim ? 0.2 : 1.35}
+          roughness={0.35}
           toneMapped={false}
           {...fade}
         />
       </mesh>
-      <mesh geometry={GEO.rackDoor} position={[0, RACK.h / 2 + 0.03, RACK.d / 2 + 0.006]}>
-        <meshStandardMaterial key={mk} color={door} roughness={0.3} metalness={0.7} {...fade} />
+      {/* Top Exhaust Fan Hub */}
+      <mesh position={[0, RACK.h + 0.1, 0]}>
+        <cylinderGeometry args={[0.24, 0.28, 0.04, 12]} />
+        <meshStandardMaterial key={mk} color="#0b1322" roughness={0.4} metalness={0.8} {...fade} />
       </mesh>
+      {/* Front Perforated Server Door */}
+      <mesh geometry={GEO.rackDoor} position={[0, RACK.h / 2 + 0.03, RACK.d / 2 + 0.006]}>
+        <meshStandardMaterial key={mk} color={door} roughness={0.28} metalness={0.75} {...fade} />
+      </mesh>
+      {/* Server Blade Status LED Strips */}
       {LED_ROWS.map((y) => (
-        <mesh key={y} geometry={GEO.rackLed} material={led} position={[0, y, RACK.d / 2 + 0.016]} />
+        <mesh key={y} geometry={GEO.rackLed} material={led} position={[-0.06, y, RACK.d / 2 + 0.016]} />
       ))}
+      {/* Vertical Real-Time RAM Load Meter Bar on Right Edge of Door */}
+      <mesh position={[RACK.w / 2 - 0.14, 0.18 + barH / 2, RACK.d / 2 + 0.018]}>
+        <boxGeometry args={[0.055, barH, 0.016]} />
+        <meshStandardMaterial
+          key={mk}
+          color="#000000"
+          emissive={kind}
+          emissiveIntensity={dim ? 0.2 : 2.1}
+          toneMapped={false}
+          {...fade}
+        />
+      </mesh>
       <ReplicaMarks count={svc.replicas} z={RACK.d / 2 + 0.2} dim={dim} />
     </group>
   );
@@ -107,29 +140,46 @@ export function Tank({ svc, dim, heat }: UnitProps) {
 
   return (
     <group>
+      {/* Heavy Pressurized Silo Base */}
       <mesh geometry={GEO.tankBase} position-y={0.04} receiveShadow>
-        <meshStandardMaterial key={mk} color="#070b13" roughness={0.6} metalness={0.4} {...fade} />
+        <meshStandardMaterial key={mk} color="#070b13" roughness={0.55} metalness={0.5} {...fade} />
       </mesh>
+      {/* Pressurized Cylinder Body */}
       <mesh geometry={GEO.tankBody} position-y={0.08 + TANK.h / 2} castShadow={!dim} receiveShadow>
-        <meshStandardMaterial key={mk} color={body} roughness={0.28} metalness={0.75} {...fade} />
+        <meshStandardMaterial key={mk} color={body} roughness={0.25} metalness={0.8} {...fade} />
       </mesh>
-      <mesh geometry={GEO.tankDome} position-y={top} scale-y={0.35} castShadow={!dim}>
-        <meshStandardMaterial key={mk} color={body} roughness={0.28} metalness={0.75} {...fade} />
+      {/* 4 External Structural Containment Struts around the DB Silo */}
+      {[0, 1, 2, 3].map((i) => {
+        const a = (i * Math.PI) / 2 + Math.PI / 4;
+        const rx = Math.cos(a) * (TANK.r + 0.025);
+        const rz = Math.sin(a) * (TANK.r + 0.025);
+        return (
+          <mesh key={i} position={[rx, 0.08 + TANK.h / 2, rz]}>
+            <boxGeometry args={[0.045, TANK.h, 0.045]} />
+            <meshStandardMaterial key={mk} color="#17263c" roughness={0.35} metalness={0.85} {...fade} />
+          </mesh>
+        );
+      })}
+      {/* Top Pressure Dome */}
+      <mesh geometry={GEO.tankDome} position-y={top} scale-y={0.38} castShadow={!dim}>
+        <meshStandardMaterial key={mk} color={body} roughness={0.25} metalness={0.8} {...fade} />
       </mesh>
-      {[0.3, 0.55, 0.8].map((f) => (
+      {/* Glowing Plasma Containment Bands */}
+      {[0.28, 0.55, 0.82].map((f) => (
         <mesh key={f} geometry={GEO.tankBand} position-y={0.08 + TANK.h * f}>
           <meshStandardMaterial
             key={mk}
             color="#000000"
             emissive={band}
-            emissiveIntensity={dim ? 0.25 : 1.9}
+            emissiveIntensity={dim ? 0.25 : 2.1}
             side={THREE.DoubleSide}
             toneMapped={false}
             {...fade}
           />
         </mesh>
       ))}
-      <mesh geometry={GEO.tankLed} material={ledMaterial(svc.status, dim)} position-y={top + TANK.r * 0.35 + 0.02} />
+      {/* Top Status Beacon */}
+      <mesh geometry={GEO.tankLed} material={ledMaterial(svc.status, dim)} position-y={top + TANK.r * 0.38 + 0.02} />
     </group>
   );
 }
@@ -191,7 +241,7 @@ function Ring({ slot, color, opacity, pulse }: { slot: Slot; color: string; opac
     if (ref.current && pulse && !still) ref.current.scale.setScalar(1 + Math.sin(clock.elapsedTime * 3) * 0.04);
   });
   return (
-    <mesh ref={ref} geometry={GEO.ring} position={[slot.pos[0], 0.05, slot.pos[2]]} rotation-x={-Math.PI / 2}>
+    <mesh ref={ref} geometry={GEO.ring} position={[slot.pos[0], 0.055, slot.pos[2]]} rotation-x={-Math.PI / 2}>
       <meshBasicMaterial color={color} transparent opacity={opacity} toneMapped={false} depthWrite={false} />
     </mesh>
   );
@@ -205,13 +255,13 @@ function HoverTip({ slot }: { slot: Slot }) {
       <div className="tip">
         <strong>{svc.name}</strong>
         <span>CPU {pct(svc.cpu)}</span>
-        <span>{mb(svc.memMb)}</span>
+        <span>RAM {mb(svc.memMb)}</span>
+        {svc.net && <span>↓{rate(svc.net.rxBps)}</span>}
       </div>
     </Label>
   );
 }
 
-/** Spinning diamond above the selected unit; floor rings get hidden behind the row in front. */
 function SelectPin({ slot }: { slot: Slot }) {
   const svc = useStore((s) => s.services[slot.serviceId]);
   const still = useStore((s) => s.reducedMotion);

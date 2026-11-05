@@ -1,4 +1,4 @@
-﻿import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { isDb } from '../data/types';
 import { SAMPLE_SECONDS } from '../data/source';
 import { ago, duration, mb, pct, rate } from '../format';
@@ -16,7 +16,34 @@ export function Inspector() {
   const deployments = useStore((s) => s.deployments);
   const now = useStore((s) => s.now);
 
+  const [logs, setLogs] = useState<string[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+
   const recent = useMemo(() => (id ? latestDeploys(deployments, id, 3) : []), [deployments, id]);
+
+  useEffect(() => {
+    if (!id) {
+      setLogs([]);
+      return;
+    }
+    let active = true;
+    setLoadingLogs(true);
+    useStore
+      .getState()
+      .fetchLogs(id)
+      .then((lines) => {
+        if (active) setLogs(lines.slice(-25));
+      })
+      .catch(() => {
+        if (active) setLogs([]);
+      })
+      .finally(() => {
+        if (active) setLoadingLogs(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [id]);
 
   if (!svc) return null;
 
@@ -34,6 +61,7 @@ export function Inspector() {
             <button type="button" className="link" onClick={() => focusProject(svc.projectId)}>
               {project?.name}
             </button>
+            {project?.organizationName && <> · {project.organizationName}</>}
             {env && <> · {env.name}</>}
           </p>
         </div>
@@ -50,7 +78,7 @@ export function Inspector() {
             <ExternalIcon />
           </a>
         ) : (
-          <span className="muted small">No public domain</span>
+          <span className="muted small">Red interna Docker</span>
         )}
       </div>
 
@@ -58,36 +86,36 @@ export function Inspector() {
 
       <section className="insp-card">
         <div className="insp-card-head">
-          <span className="label">CPU</span>
+          <span className="label">CPU en tiempo real</span>
           <span className="value num">{pct(svc.cpu)}</span>
         </div>
         <Sparkline values={svc.cpuHist} height={48} />
         <div className="spark-axis muted">
-          <span>{svc.cpuHist.length > 1 ? `${duration(svc.cpuHist.length * SAMPLE_SECONDS * 1000)} ago` : 'collecting…'}</span>
-          <span>now</span>
+          <span>{svc.cpuHist.length > 1 ? `hace ${duration(svc.cpuHist.length * SAMPLE_SECONDS * 1000)}` : 'muestreando…'}</span>
+          <span>ahora</span>
         </div>
       </section>
 
       <section className="insp-card">
         <div className="insp-card-head">
-          <span className="label">Memory</span>
+          <span className="label">Memoria RAM activa</span>
           <span className="value num">
             {mb(svc.memMb)} <span className="muted">/ {mb(svc.memLimitMb)}</span>
           </span>
         </div>
         <div className={`bar ${memRatio > 0.8 ? 'is-warn' : ''}`}>
-          <span style={{ width: `${Math.min(100, memRatio * 100)}%` }} />
+          <span style={{ width: `${Math.min(100, Math.max(2, memRatio * 100))}%` }} />
         </div>
       </section>
 
       {svc.net && (
         <section className="insp-card net-card">
           <div>
-            <span className="label">↓ Received</span>
+            <span className="label">↓ Tráfico RX</span>
             <b className="num rx">{rate(svc.net.rxBps)}</b>
           </div>
           <div>
-            <span className="label">↑ Sent</span>
+            <span className="label">↑ Tráfico TX</span>
             <b className="num tx">{rate(svc.net.txBps)}</b>
           </div>
         </section>
@@ -96,61 +124,57 @@ export function Inspector() {
       <dl className="meta">
         {svc.appName && (
           <>
-            <dt>App name</dt>
+            <dt>Contenedor</dt>
             <dd className="mono">{svc.appName}</dd>
           </>
         )}
         {svc.source && (
           <>
-            <dt>Source</dt>
+            <dt>Imagen</dt>
             <dd className="mono">{svc.source}</dd>
           </>
         )}
-        <dt>Server</dt>
+        <dt>Servidor</dt>
         <dd className="mono">{server?.name ?? svc.serverId}</dd>
-        <dt>Replicas</dt>
+        <dt>Estado</dt>
         <dd className="num">
           {svc.containers === undefined
             ? svc.replicas
-            : svc.kind === 'compose'
-              ? `${svc.containers} container${svc.containers === 1 ? '' : 's'}`
-              : `${svc.containers} / ${svc.replicas} running`}
+            : `${svc.containers} / ${svc.replicas} activo`}
         </dd>
         {!db && (
           <>
-            <dt>Last deploy</dt>
+            <dt>Iniciado</dt>
             <dd>{ago(svc.lastDeploy, now)}</dd>
-          </>
-        )}
-        {svc.createdAt && (
-          <>
-            <dt>Created</dt>
-            <dd>{new Date(svc.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</dd>
           </>
         )}
       </dl>
 
-      {!db && (
-        <section>
-          <h3 className="section-title">Recent deploys</h3>
-          {recent.length ? (
-            <ul className="mini-list">
-              {recent.map((d) => (
-                <li key={d.id} title={`${TRIGGER_LABEL[d.trigger]}${d.commit?.author ? ` · ${d.commit.author}` : ''}`}>
-                  <span className="mono">{d.commit?.sha || '—'}</span>
-                  <span className="truncate">{d.commit?.message ?? 'Manual deployment'}</span>
-                  <span className="muted small">{ago(d.createdAt, now)}</span>
-                  <DeployPill status={d.status} />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted small">No deploys yet.</p>
-          )}
-        </section>
-      )}
+      <section>
+        <h3 className="section-title">Terminal · Logs en Vivo</h3>
+        {loadingLogs ? (
+          <p className="muted small">Cargando salida del contenedor…</p>
+        ) : logs.length > 0 ? (
+          <pre className="live-logs-box mono">
+            {logs.join('\n')}
+          </pre>
+        ) : recent.length > 0 ? (
+          <ul className="mini-list">
+            {recent.map((d) => (
+              <li key={d.id} title={`${TRIGGER_LABEL[d.trigger]}${d.commit?.author ? ` · ${d.commit.author}` : ''}`}>
+                <span className="mono">{d.commit?.sha || '—'}</span>
+                <span className="truncate">{d.commit?.message ?? 'Manual deployment'}</span>
+                <span className="muted small">{ago(d.createdAt, now)}</span>
+                <DeployPill status={d.status} />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted small">Sin salida reciente en stdout/stderr.</p>
+        )}
+      </section>
 
-      <p className="insp-foot muted small">Read-only · live from Dokploy</p>
+      <p className="insp-foot muted small">Telemetría Industrial Directa · Docker Engine Socket</p>
     </aside>
   );
 }

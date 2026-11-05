@@ -1,11 +1,13 @@
 /**
- * Turns the world (projects → environments → services) into scene coordinates.
- * Everything is derived from data; nothing is placed by hand.
+ * Turns the world (organizations → projects → environments → services) into a multi-sector
+ * cyber-industrial complex in 3D coordinates.
  *
- * - every project is a building, every environment a zone inside it, every service a rack/tank
- * - buildings sit on a grid; each grid row shares a front line, so all doors of a row open onto
- *   the same "street", and a single "avenue" left of the grid connects the streets. Agents only
- *   walk along streets, the avenue and building interiors, so they never cut through walls.
+ * - every Organization is an Industrial Sector (District) with its own perimeter compound
+ * - every Project is an Industrial Plant / Building inside its Organization's sector
+ * - every Environment is a Zone inside the plant, every Service a Blade Rack or Reactor Silo
+ * - buildings sit on sector rows; each row shares a front line, so all doors of a row open onto
+ *   the same "street", and the main "avenue" left of the complex connects all streets and the
+ *   Central VPS Power Reactor.
  *
  * Frame: x → right, z → toward the camera, y up.
  */
@@ -13,27 +15,30 @@ import { isDb, type Environment, type Project, type Service } from './data/types
 
 export type V3 = [number, number, number];
 
-export const PITCH = 1.2;
-export const RACK = { w: 0.9, h: 1.6, d: 0.8 } as const;
-export const TANK = { r: 0.38, h: 1.25 } as const;
-export const WALL = { high: 2.4, low: 0.55, t: 0.16 } as const;
-export const DOOR_W = 1.5;
+export const PITCH = 1.35;
+export const RACK = { w: 0.94, h: 1.72, d: 0.84 } as const;
+export const TANK = { r: 0.44, h: 1.42 } as const;
+export const WALL = { high: 2.75, low: 0.62, t: 0.18 } as const;
+export const DOOR_W = 1.65;
 
 const MAX_PER_ROW = 6;
 const MIN_PER_ROW = 3;
-const MARGIN = 0.7;
-const SPINE_W = 1.5;
-const SPINE_GAP = 0.5;
-const AISLE = 1.3;
-const ROW_GAP = 0.45;
+const MARGIN = 0.85;
+const SPINE_W = 1.6;
+const SPINE_GAP = 0.55;
+const AISLE = 1.4;
+const ROW_GAP = 0.5;
 const ROW_D = RACK.d + AISLE + ROW_GAP;
-const FRONT_PAD = 0.9;
-const COL_GAP = 4.5;
-/** Space between grid rows; the street runs through it. */
-const STREET_GAP = 5;
+const FRONT_PAD = 1.05;
+const COL_GAP = 6.0;
+/** Space between grid rows within the same sector; the street runs through it. */
+const STREET_GAP = 6.2;
+/** Extra highway gap between two different Organization Sectors. */
+const SECTOR_GAP_Z = 4.6;
 /** Distance of the street line from a row's front walls. */
-const STREET = 1.6;
-const AVENUE = 2.4;
+const STREET = 1.85;
+const AVENUE = 3.2;
+const MAX_COLS_PER_SECTOR_ROW = 4;
 
 export interface ZoneLayout {
   environmentId: string;
@@ -46,6 +51,7 @@ export interface ZoneLayout {
 
 export interface BuildingLayout {
   projectId: string;
+  organizationId: string;
   /** Grid row; 0 is the back-most. */
   gridRow: number;
   /** Back-left outer corner. */
@@ -56,6 +62,19 @@ export interface BuildingLayout {
   doorX: number;
   spine: { x: number; z0: number; z1: number; w: number };
   zones: ZoneLayout[];
+}
+
+export interface DistrictLayout {
+  id: string;
+  name: string;
+  color: string;
+  sectorIndex: number;
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+  projectIds: string[];
+  frontStreetZ: number;
 }
 
 export interface Slot {
@@ -69,12 +88,15 @@ export interface Slot {
 }
 
 export interface Layout {
+  districts: DistrictLayout[];
   buildings: BuildingLayout[];
   slots: Record<string, Slot>;
   /** z of each grid row's street. */
   streets: number[];
   avenueX: number;
-  /** Technician's waiting spot, on the front street. */
+  /** Central VPS Power Plant & Mainframe Reactor position (left of the avenue). */
+  reactorPos: V3;
+  /** Technician's control station spot, on the front street. */
   home: V3;
   center: V3;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
@@ -89,7 +111,7 @@ interface Structure {
 /** Changes only when something that affects placement changes (not on metric ticks). */
 export function structureKey({ projects, environments, services }: Structure) {
   return [
-    projects.map((p) => p.id).join(','),
+    projects.map((p) => `${p.id}@${p.organizationId ?? 'default'}`).join(','),
     environments.map((e) => `${e.id}@${e.projectId}`).join(','),
     services.map((s) => `${s.id}@${s.environmentId}:${isDb(s.kind) ? 'd' : 'a'}`).join(','),
   ].join('|');
@@ -108,7 +130,7 @@ export function computeLayout({ projects, environments, services }: Structure): 
   for (const list of byEnv.values()) list.sort((a, b) => Number(isDb(a.kind)) - Number(isDb(b.kind)));
 
   const ordered = [...projects].sort((a, b) => {
-    const orgDiff = (a.organizationId || '').localeCompare(b.organizationId || '');
+    const orgDiff = (a.organizationId || 'org-default').localeCompare(b.organizationId || 'org-default');
     if (orgDiff !== 0) return orgDiff;
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
   });
@@ -120,91 +142,186 @@ export function computeLayout({ projects, environments, services }: Structure): 
       .map((env) => ({ env, rows: chunk(byEnv.get(env.id)!, MAX_PER_ROW) }));
     const rowCount = Math.max(1, envs.reduce((a, e) => a + e.rows.length, 0));
     const perRow = Math.max(MIN_PER_ROW, ...envs.flatMap((e) => e.rows.map((r) => r.length)));
-    const spineX = WALL.t + 0.35 + SPINE_W / 2;
+    const spineX = WALL.t + 0.4 + SPINE_W / 2;
     const rackStartX = spineX + SPINE_W / 2 + SPINE_GAP;
     const w = rackStartX + perRow * PITCH + MARGIN + WALL.t;
     const d = WALL.t + MARGIN + rowCount * ROW_D - ROW_GAP + FRONT_PAD + WALL.t;
-    return { project, envs, spineX, rackStartX, w, d };
+    const orgId = project.organizationId || 'org-default';
+    const orgName = project.organizationName || 'Sector Industrial Principal';
+    const orgColor = project.organizationColor || project.color || '#00f0ff';
+    return { project, orgId, orgName, orgColor, envs, spineX, rackStartX, w, d };
   });
 
-  // 2. Grid: columns share a width, rows share a depth and a front line.
-  const cols = Math.max(1, Math.ceil(Math.sqrt(drafts.length)));
-  const gridRows = Math.max(1, Math.ceil(drafts.length / cols));
-  const colW = Array.from({ length: cols }, (_, c) => Math.max(0, ...drafts.filter((_, i) => i % cols === c).map((d) => d.w)));
-  const rowD = Array.from({ length: gridRows }, (_, r) => Math.max(0, ...drafts.filter((_, i) => Math.floor(i / cols) === r).map((d) => d.d)));
+  // 2. Group drafts by Organization Sector so each Organization forms its own clean row(s).
+  const orgMap = new Map<string, { id: string; name: string; color: string; items: typeof drafts }>();
+  for (const d of drafts) {
+    if (!orgMap.has(d.orgId)) {
+      orgMap.set(d.orgId, { id: d.orgId, name: d.orgName, color: d.orgColor, items: [] });
+    }
+    orgMap.get(d.orgId)!.items.push(d);
+  }
+
+  // Build rows of drafts: each row belongs to a single organization (up to MAX_COLS_PER_SECTOR_ROW buildings per row).
+  const rowDrafts: Array<{ orgId: string; orgName: string; orgColor: string; cols: typeof drafts }> = [];
+  for (const orgGroup of orgMap.values()) {
+    const chunks = chunk(orgGroup.items, MAX_COLS_PER_SECTOR_ROW);
+    for (const c of chunks) {
+      rowDrafts.push({
+        orgId: orgGroup.id,
+        orgName: orgGroup.name,
+        orgColor: orgGroup.color,
+        cols: c,
+      });
+    }
+  }
+
+  if (rowDrafts.length === 0) {
+    return {
+      districts: [],
+      buildings: [],
+      slots: {},
+      streets: [0],
+      avenueX: -5,
+      reactorPos: [-10, 0, 0],
+      home: [-3.5, 0, 1],
+      center: [0, 0, 0],
+      bounds: { minX: -12, maxX: 12, minZ: -12, maxZ: 12 },
+    };
+  }
+
+  const maxCols = Math.max(1, ...rowDrafts.map((r) => r.cols.length));
+  const gridRows = rowDrafts.length;
+
+  const colW = Array.from({ length: maxCols }, (_, c) =>
+    Math.max(0, ...rowDrafts.map((r) => r.cols[c]?.w ?? 0)),
+  );
+  const rowD = rowDrafts.map((r) => Math.max(0, ...r.cols.map((d) => d.d)));
+
   const colX: number[] = [];
   colW.reduce((x, w, c) => ((colX[c] = x), x + w + COL_GAP), 0);
-  const front: number[] = [];
-  rowD.reduce((z, d, r) => ((front[r] = z + d), z + d + STREET_GAP), 0);
 
-  const totalW = colW.reduce((a, b) => a + b, 0) + COL_GAP * (cols - 1);
-  const totalD = front[gridRows - 1] + STREET + 2;
+  const front: number[] = [];
+  let accumZ = 0;
+  for (let r = 0; r < gridRows; r++) {
+    if (r > 0) {
+      const sameOrg = rowDrafts[r].orgId === rowDrafts[r - 1].orgId;
+      accumZ += STREET_GAP + (sameOrg ? 0 : SECTOR_GAP_Z);
+    }
+    accumZ += rowD[r];
+    front[r] = accumZ;
+  }
+
+  const totalW = colW.reduce((a, b) => a + b, 0) + COL_GAP * Math.max(0, maxCols - 1);
+  const totalD = front[gridRows - 1] + STREET + 2.5;
   const ox = -totalW / 2;
   const oz = -totalD / 2;
 
   const buildings: BuildingLayout[] = [];
   const slots: Record<string, Slot> = {};
 
-  drafts.forEach((b, i) => {
-    const gridRow = Math.floor(i / cols);
-    const bx = ox + colX[i % cols];
-    const bz = oz + front[gridRow] - b.d;
-    let row = 0;
-    const aisles: number[] = [];
+  rowDrafts.forEach((rowObj, gridRow) => {
+    rowObj.cols.forEach((b, colIdx) => {
+      const bx = ox + colX[colIdx];
+      const bz = oz + front[gridRow] - b.d;
+      let row = 0;
+      const aisles: number[] = [];
 
-    const zones: ZoneLayout[] = b.envs.map(({ env, rows }) => {
-      const first = row;
-      rows.forEach((list) => {
-        const rackZ = bz + WALL.t + MARGIN + RACK.d / 2 + row * ROW_D;
-        const aisleZ = rackZ + RACK.d / 2 + AISLE / 2;
-        aisles.push(aisleZ);
-        list.forEach((svc, k) => {
-          const x = bx + b.rackStartX + PITCH / 2 + k * PITCH;
-          slots[svc.id] = {
-            serviceId: svc.id,
-            projectId: b.project.id,
-            environmentId: env.id,
-            pos: [x, 0, rackZ],
-            front: [x, 0, aisleZ],
-          };
+      const zones: ZoneLayout[] = b.envs.map(({ env, rows }) => {
+        const first = row;
+        rows.forEach((list) => {
+          const rackZ = bz + WALL.t + MARGIN + RACK.d / 2 + row * ROW_D;
+          const aisleZ = rackZ + RACK.d / 2 + AISLE / 2;
+          aisles.push(aisleZ);
+          list.forEach((svc, k) => {
+            const x = bx + b.rackStartX + PITCH / 2 + k * PITCH;
+            slots[svc.id] = {
+              serviceId: svc.id,
+              projectId: b.project.id,
+              environmentId: env.id,
+              pos: [x, 0, rackZ],
+              front: [x, 0, aisleZ],
+            };
+          });
+          row++;
         });
-        row++;
+        const widest = Math.max(...rows.map((r) => r.length));
+        const firstRackZ = bz + WALL.t + MARGIN + RACK.d / 2 + first * ROW_D;
+        return {
+          environmentId: env.id,
+          projectId: b.project.id,
+          x0: bx + b.rackStartX - 0.25,
+          x1: bx + b.rackStartX + widest * PITCH + 0.25,
+          z0: firstRackZ - RACK.d / 2 - 0.25,
+          z1: aisles[aisles.length - 1] + AISLE / 2 - 0.05,
+        };
       });
-      const widest = Math.max(...rows.map((r) => r.length));
-      const firstRackZ = bz + WALL.t + MARGIN + RACK.d / 2 + first * ROW_D;
-      return {
-        environmentId: env.id,
-        projectId: b.project.id,
-        x0: bx + b.rackStartX - 0.25,
-        x1: bx + b.rackStartX + widest * PITCH + 0.25,
-        z0: firstRackZ - RACK.d / 2 - 0.25,
-        z1: aisles[aisles.length - 1] + AISLE / 2 - 0.05,
-      };
-    });
 
-    buildings.push({
-      projectId: b.project.id,
-      gridRow,
-      x: bx,
-      z: bz,
-      w: b.w,
-      d: b.d,
-      doorX: bx + b.spineX,
-      spine: { x: bx + b.spineX, z0: (aisles[0] ?? bz + b.d / 2) - AISLE / 2, z1: bz + b.d - WALL.t, w: SPINE_W },
-      zones,
+      buildings.push({
+        projectId: b.project.id,
+        organizationId: b.orgId,
+        gridRow,
+        x: bx,
+        z: bz,
+        w: b.w,
+        d: b.d,
+        doorX: bx + b.spineX,
+        spine: { x: bx + b.spineX, z0: (aisles[0] ?? bz + b.d / 2) - AISLE / 2, z1: bz + b.d - WALL.t, w: SPINE_W },
+        zones,
+      });
     });
   });
 
   const streets = front.map((z) => oz + z + STREET);
+
+  // 3. Compute Industrial District compounds for each Organization
+  const districts: DistrictLayout[] = [];
+  let sectorIndex = 1;
+  for (const [orgId, orgGroup] of orgMap.entries()) {
+    const orgBuildings = buildings.filter((b) => b.organizationId === orgId);
+    if (!orgBuildings.length) continue;
+
+    const minBx = Math.min(...orgBuildings.map((b) => b.x));
+    const maxBx = Math.max(...orgBuildings.map((b) => b.x + b.w));
+    const minBz = Math.min(...orgBuildings.map((b) => b.z));
+    const maxBz = Math.max(...orgBuildings.map((b) => b.z + b.d));
+    const maxRow = Math.max(...orgBuildings.map((b) => b.gridRow));
+
+    const padX = 1.65;
+    const padBack = 1.35;
+    const padFront = 2.65;
+
+    districts.push({
+      id: orgId,
+      name: orgGroup.name,
+      color: orgGroup.color,
+      sectorIndex: sectorIndex++,
+      x: minBx - padX,
+      z: minBz - padBack,
+      w: maxBx - minBx + padX * 2,
+      d: maxBz - minBz + padBack + padFront,
+      projectIds: orgBuildings.map((b) => b.projectId),
+      frontStreetZ: streets[maxRow],
+    });
+  }
+
   const avenueX = ox - AVENUE;
+  const centerZ = oz + totalD / 2;
+  const reactorPos: V3 = [avenueX - 6.8, 0, centerZ - 1.5];
   const home: V3 = [avenueX + 1.2, 0, streets[gridRows - 1] + 0.9];
-  const bounds = { minX: avenueX - 1, maxX: ox + totalW, minZ: oz, maxZ: oz + totalD };
+  const bounds = {
+    minX: reactorPos[0] - 4.5,
+    maxX: ox + totalW + 3,
+    minZ: oz - 3,
+    maxZ: oz + totalD + 3,
+  };
 
   return {
+    districts,
     buildings,
     slots,
     streets,
     avenueX,
+    reactorPos,
     home,
     center: [(bounds.minX + bounds.maxX) / 2, 0, (bounds.minZ + bounds.maxZ) / 2],
     bounds,
