@@ -1,10 +1,22 @@
 services:
   3dokploy:
-    image: ghcr.io/suleyman/3dokploy:0.1.1
+    image: ghcr.io/ronnyia/3dokploy-multi:latest
+    pull_policy: always
+    user: "0:0"
     restart: unless-stopped
+    ports:
+      - "3100:3000"
     environment:
-      - DOKPLOY_URL=${DOKPLOY_URL}
-      - DOKPLOY_API_KEY=${DOKPLOY_API_KEY}
-      - BASIC_AUTH=${BASIC_AUTH}
-    extra_hosts:
-      - host.docker.internal:host-gateway
+      - PORT=3000
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - default
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    name: dokploy-network
+    external: true

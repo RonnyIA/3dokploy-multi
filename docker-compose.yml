@@ -1,10 +1,11 @@
 # 3Dokploy Multi-Org Docker Compose
-# Despliegue con soporte para 4 organizaciones, login y Docker socket interno
+# Despliegue 100% autónomo (estilo Beszel) con soporte para Docker Socket, login y persistencia segura
 services:
   3dokploy:
-    build: .
-    image: 3dokploy:multi-org
+    image: ghcr.io/ronnyia/3dokploy-multi:latest
+    pull_policy: always
     container_name: 3dokploy-multi
+    user: "0:0"
     restart: unless-stopped
     ports:
       # Puerto 3100 en el host para no chocar con el puerto 3000 de Dokploy
@@ -12,15 +13,11 @@ services:
     environment:
       - PORT=3000
       - DATA_DIR=/app/data
-      - DOKPLOY_URL=${DOKPLOY_URL:-http://host.docker.internal:3000}
     volumes:
-      # Persistencia de configuraciones, usuarios y contraseñas
+      # Persistencia de credenciales y configuración
       - ./data:/app/data
-      # Acceso interno a métricas de contenedores en tiempo real (estilo Beszel)
+      # Escaneo automático de todos los contenedores y stacks del VPS (Modo Beszel)
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    extra_hosts:
-      # Permite comunicar con el host interno si se usa http://host.docker.internal:3000
-      - host.docker.internal:host-gateway
     networks:
       - default
       - dokploy-network
