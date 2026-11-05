@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 export interface OrgInput {
   id?: string;
@@ -94,11 +94,6 @@ export function AuthModal({
       setError('Las contraseñas no coinciden');
       return;
     }
-    const validOrgs = organizations.filter((o) => o.name.trim().length > 0);
-    if (validOrgs.length === 0) {
-      setError('Debes configurar al menos una organización');
-      return;
-    }
 
     setLoading(true);
     setError(null);
@@ -110,7 +105,7 @@ export function AuthModal({
           username,
           password,
           dokployUrl,
-          organizations: validOrgs,
+          organizations: [],
         }),
       });
       const data = await res.json();
@@ -292,68 +287,15 @@ export function AuthModal({
               </div>
 
               <div className="form-section">
-                <h3>2. Conexión Dokploy</h3>
-                <div className="form-group">
-                  <label>URL del servidor Dokploy</label>
-                  <input
-                    type="text"
-                    value={dokployUrl}
-                    onChange={(e) => setDokployUrl(e.target.value)}
-                    placeholder="http://host.docker.internal:3000"
-                    required
-                  />
-                  <span className="form-help">
-                    Usa <code>http://host.docker.internal:3000</code> si está en el mismo servidor o tu URL pública.
-                  </span>
-                </div>
-              </div>
-
-              <div className="form-section">
-                <div className="orgs-header">
-                  <h3>3. Tus Organizaciones y Colores 3D</h3>
-                  <button type="button" className="btn-small" onClick={addOrg}>
-                    + Añadir Otra
-                  </button>
-                </div>
-                <div className="orgs-list">
-                  {organizations.map((org, idx) => (
-                    <div key={idx} className="org-row">
-                      <input
-                        type="color"
-                        value={org.color}
-                        onChange={(e) => updateOrg(idx, 'color', e.target.value)}
-                        className="color-picker"
-                        title="Color distintivo para esta organización"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Nombre de la Org"
-                        value={org.name}
-                        onChange={(e) => updateOrg(idx, 'name', e.target.value)}
-                        required
-                        className="org-name-input"
-                      />
-                      <input
-                        type="password"
-                        placeholder="Dokploy API Key"
-                        value={org.apiKey}
-                        onChange={(e) => updateOrg(idx, 'apiKey', e.target.value)}
-                        className="org-key-input"
-                        required
-                      />
-                      {organizations.length > 1 && (
-                        <button type="button" className="btn-icon" onClick={() => removeOrg(idx)} title="Eliminar">
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <h3>🐳 Modo Autónomo (Docker Socket)</h3>
+                <p className="form-help" style={{ fontSize: '13px', lineHeight: '1.5', margin: 0, color: 'var(--text-2)' }}>
+                  ✨ <strong>Cero API Keys requeridas:</strong> 3Dokploy se conectará directamente a <code>/var/run/docker.sock</code> para escanear y visualizar todos tus contenedores, aplicaciones y bases de datos automáticamente en 3D.
+                </p>
               </div>
 
               <div className="auth-actions">
                 <button type="submit" className="btn-primary full-width" disabled={loading}>
-                  {loading ? 'Inicializando…' : 'Finalizar Configuración y Entrar al 3D'}
+                  {loading ? 'Escaneando…' : '🚀 Iniciar Escaneo y Entrar al 3D'}
                 </button>
               </div>
             </form>

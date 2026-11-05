@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { DokploySource } from './data/source';
+import { DockerEngineSource } from './data/source';
 import { ago } from './format';
 import { Breadcrumb } from './hud/Breadcrumb';
 import { Inspector } from './hud/Inspector';
@@ -59,12 +59,12 @@ export function App() {
     checkAuth();
   }, [checkAuth]);
 
-  // Connect / Reconnect data source when authenticated or activeOrgId changes
+  // Connect data source via Docker Socket (Beszel mode)
   useEffect(() => {
     if (!authenticated) return;
-    const disconnect = useStore.getState().connect(new DokploySource(activeOrgId));
+    const disconnect = useStore.getState().connect(new DockerEngineSource());
     return () => disconnect();
-  }, [authenticated, activeOrgId]);
+  }, [authenticated]);
 
   useEffect(() => {
     bindSounds();
@@ -142,16 +142,16 @@ function Boot() {
     return (
       <div className="boot panel">
         <span className="bubble-spinner" />
-        Sincronizando con Dokploy…
+        Escaneando contenedores y servicios en el VPS…
       </div>
     );
   }
   return (
     <div className="boot boot-error panel" role="alert">
-      <strong>No se pueden cargar los datos de Dokploy</strong>
+      <strong>No se puede conectar a Docker Socket</strong>
       <p className="mono">{loadError}</p>
       <p className="muted small">
-        Reintentando cada 5 segundos. Puedes revisar la URL y las API Keys de tus organizaciones en el botón de ajustes ⚙️.
+        Verifica que <code>/var/run/docker.sock:/var/run/docker.sock:ro</code> esté montado en tu contenedor.
       </p>
     </div>
   );

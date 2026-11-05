@@ -13,7 +13,12 @@ import {
   handleSaveOrganizations,
 } from './auth.ts';
 import { forwardWithOrg, handleGlobalProjects } from './dokploy.ts';
-import { isDockerSocketAvailable, queryDockerSocket } from './dockerSocket.ts';
+import {
+  buildWorldFromDockerSocket,
+  getDockerContainerLogs,
+  isDockerSocketAvailable,
+  queryDockerSocket,
+} from './dockerSocket.ts';
 import { loadConfig } from './storage.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -61,8 +66,22 @@ app.get('/api/global/projects', handleGlobalProjects);
 app.get('/api/org/:orgId/:procedure', forwardWithOrg());
 app.get('/api/:procedure', forwardWithOrg());
 
-// Docker Socket endpoints (optional internal telemetry like Beszel)
+// Docker Socket endpoints (internal telemetry like Beszel)
 app.get('/api/docker/status', (c) => c.json({ available: isDockerSocketAvailable() }));
+app.get('/api/docker/world', async (c) => {
+  try {
+    const world = await buildWorldFromDockerSocket();
+    return c.json(world);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 502);
+  }
+});
+app.get('/api/docker/containers/:id/logs', async (c) => {
+  const id = c.req.param('id');
+  const tail = Number(c.req.query('tail') || 50);
+  const logs = await getDockerContainerLogs(id, tail);
+  return c.text(logs);
+});
 app.get('/api/docker/containers', async (c) => {
   if (!isDockerSocketAvailable()) {
     return c.json({ error: 'Docker socket not available' }, 404);

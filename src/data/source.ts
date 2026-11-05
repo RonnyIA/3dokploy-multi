@@ -1,5 +1,6 @@
 import { Collector } from './dokploy/collector';
 import { fetchVersion, serverTransport, type Transport } from './dokploy/api';
+import { diffWorld } from './diff';
 import type { SourceStatus, World, WorldPatch } from './types';
 
 export type PatchListener = (patch: WorldPatch) => void;
@@ -21,9 +22,82 @@ const POLL_MS = 5000;
 export const SAMPLE_SECONDS = 10;
 
 /**
- * Read-only view of the Dokploy this server is configured for (DOKPLOY_URL / DOKPLOY_API_KEY).
- * The collector runs right here in the browser and calls this app's own /api, which forwards
- * an allowlist of read-only endpoints with the server's key. Polling pauses while the tab is hidden.
+ * Native Docker Engine Source (Beszel Mode).
+ * Reads all containers directly from /var/run/docker.sock with ZERO API keys required!
+ */
+export class DockerEngineSource implements DataSource {
+  private lastWorld: World | null = null;
+  private readonly patchListeners = new Set<PatchListener>();
+  private readonly statusListeners = new Set<StatusListener>();
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  async load(): Promise<World> {
+    const res = await fetch('/api/docker/world');
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error || 'No se pudo conectar a Docker Socket');
+    }
+    const world = (await res.json()) as World;
+    this.lastWorld = world;
+    return world;
+  }
+
+  subscribe(onPatch: PatchListener, onStatus?: StatusListener): () => void {
+    this.patchListeners.add(onPatch);
+    if (onStatus) {
+      this.statusListeners.add(onStatus);
+      onStatus({ state: 'live', syncedAt: Date.now() });
+    }
+
+    const poll = async () => {
+      if (document.hidden) return;
+      try {
+        const res = await fetch('/api/docker/world');
+        if (!res.ok) throw new Error('Error consultando Docker Socket');
+        const nextWorld = (await res.json()) as World;
+        const patch = diffWorld(this.lastWorld, nextWorld);
+        this.lastWorld = nextWorld;
+        if (patch) {
+          for (const l of this.patchListeners) l(patch);
+        }
+        for (const s of this.statusListeners) s({ state: 'live', syncedAt: Date.now() });
+      } catch (err) {
+        for (const s of this.statusListeners) s({ state: 'error', message: (err as Error).message });
+      }
+    };
+
+    this.timer = setInterval(poll, POLL_MS);
+
+    return () => {
+      this.patchListeners.delete(onPatch);
+      if (onStatus) this.statusListeners.delete(onStatus);
+      if (this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    };
+  }
+
+  async logs(id: string, tail = 50): Promise<string[]> {
+    try {
+      const res = await fetch(`/api/docker/containers/${id}/logs?tail=${tail}`);
+      if (res.ok) {
+        const text = await res.text();
+        return text.split('\n').filter(Boolean);
+      }
+    } catch {
+      // ignore
+    }
+    return ['No hay logs disponibles para este contenedor'];
+  }
+
+  async version(): Promise<string | null> {
+    return 'Docker Engine (Modo Beszel)';
+  }
+}
+
+/**
+ * Dokploy REST view (for when Dokploy API key is explicitly configured).
  */
 export class DokploySource implements DataSource {
   private readonly t: Transport = serverTransport();
@@ -33,10 +107,14 @@ export class DokploySource implements DataSource {
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(readonly orgId: string = 'all') {
-    this.collector = new Collector(this.t, (event, data) => {
-      if (event === 'patch') for (const l of this.patchListeners) l(data as WorldPatch);
-      else for (const l of this.statusListeners) l(data as SourceStatus);
-    }, this.orgId);
+    this.collector = new Collector(
+      this.t,
+      (event, data) => {
+        if (event === 'patch') for (const l of this.patchListeners) l(data as WorldPatch);
+        else for (const l of this.statusListeners) l(data as SourceStatus);
+      },
+      this.orgId,
+    );
   }
 
   async load() {
